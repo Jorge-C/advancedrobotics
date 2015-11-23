@@ -74,7 +74,8 @@ class Stewart(object):
         return alpha
 
     def ik(self, pose):
-        """Compute servo angles necessary for a given pose message"""
+        """Compute servo angles necessary for a given pose message (pose
+        relative to the base pose)."""
         legs = self._calc_legs(pose)
         servo_angles = self._calc_angles(legs)
         return servo_angles
@@ -114,10 +115,16 @@ class StewartNode(object):
         self.pose_listener = rospy.Subscriber("/stewart_platform/pose",
                                               Pose,
                                               self.listen_pose)
-        rospy.logdebug("Setting up AHRS listener...")
+        rospy.logdebug("Setting up top AHRS listener...")
         self.ahrs_listener = rospy.Subscriber("/stewart_platform/imu",
                                               Imu,
                                               self.listen_imu)
+
+        self.base_orientation = np.array([0, 0, 0, 1], dtype=np.float64)
+        rospy.logdebug("Setting up base AHRS listener...")
+        self.ahrs_listener = rospy.Subscriber("/stewart_platform/imu_base",
+                                              Imu,
+                                              self.listen_imu_base)
 
         self.rp_pid = PID(1.0, 0.005, 0.0, 0.3)
         self.NN, self.t0 = 0, rospy.get_time()
@@ -138,6 +145,12 @@ class StewartNode(object):
         rospy.logdebug("Desired position: {}".format(
             self.desired_position))
 
+    def listen_imu_base(self, imu):
+        self.base_orientation[:] = np.array([imu.orientation.x,
+                                             imu.orientation.y,
+                                             imu.orientation.z,
+                                             imu.orientation.w])
+
     def listen_imu(self, imu):
         # node can sleep for 16 out of 20 ms without dropping any messages
         # rospy.sleep(16.0/1000.0)
@@ -149,16 +162,20 @@ class StewartNode(object):
                                         imu.orientation.y,
                                         imu.orientation.z,
                                         imu.orientation.w])
-        current_angular_speed = np.array([imu.angular_velocity.x,
-                                          imu.angular_velocity.y,
-                                          0.0])
-                                          
+        # current_angular_speed = np.array([imu.angular_velocity.x,
+        #                                   imu.angular_velocity.y,
+        #                                   0.0])
+        current_orientation = transformations.quaternion_multiply(
+            current_orientation,
+            transformations.quaternion_conjugate(self.base_orientation)
+            )
+
         current_rpy = list(transformations.euler_from_quaternion(current_orientation))
         # No care about yaw, but must be close to zero
         current_rpy[-1] = 0
         desired_rpy = list(transformations.euler_from_quaternion(self.desired_orientation))
         desired_rpy[-1] = 0
-        corrected = self.rp_pid(desired_rpy, current_rpy, current_angular_speed)
+        corrected = self.rp_pid(desired_rpy, current_rpy)
         corrected_orientation = transformations.quaternion_multiply(
             transformations.quaternion_from_euler(*corrected),
             transformations.quaternion_from_euler(*current_rpy))
