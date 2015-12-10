@@ -146,18 +146,15 @@ class StewartNode(object):
             self.desired_position))
 
     def listen_imu_base(self, imu):
-        self.base_orientation[:] = np.array([imu.orientation.x,
-                                             imu.orientation.y,
-                                             imu.orientation.z,
-                                             imu.orientation.w])
+        base_orientation = np.array([imu.orientation.x,
+                                     imu.orientation.y,
+                                     imu.orientation.z,
+                                     imu.orientation.w])
+        rpy = list(transformations.euler_from_quaternion(base_orientation))
+        rpy[-1] = 0
+        self.base_orientation[:] = list(transformations.quaternion_from_euler(*rpy))
 
     def listen_imu(self, imu):
-        # node can sleep for 16 out of 20 ms without dropping any messages
-        # rospy.sleep(16.0/1000.0)
-        # self.NN += 1
-        # if rospy.get_time() - self.t0 > 1:
-        #     rospy.logfatal("Published {} messages in 1 s, {} Hz".format(self.NN, self.NN))
-        #     self.NN, self.t0 = 0, rospy.get_time()
         current_orientation = np.array([imu.orientation.x,
                                         imu.orientation.y,
                                         imu.orientation.z,
@@ -165,10 +162,6 @@ class StewartNode(object):
         # current_angular_speed = np.array([imu.angular_velocity.x,
         #                                   imu.angular_velocity.y,
         #                                   0.0])
-        current_orientation = transformations.quaternion_multiply(
-            current_orientation,
-            transformations.quaternion_conjugate(self.base_orientation)
-            )
 
         current_rpy = list(transformations.euler_from_quaternion(current_orientation))
         # No care about yaw, but must be close to zero
@@ -180,57 +173,13 @@ class StewartNode(object):
             transformations.quaternion_from_euler(*corrected),
             transformations.quaternion_from_euler(*current_rpy))
 
-        setpoint_pose = Pose(self.desired_position, corrected_orientation)
-
-        servo_angles = self.platform.ik(setpoint_pose)
-        rospy.logdebug(
-            "Servo angles (deg): {}".format(np.rad2deg(servo_angles)))
-        self.publish_servo_angles(servo_angles)
-
-    def listen_imu_quaternion(self, imu):
-        """Doesn't work b/c desired yaw is too far from possible yaw"""
-        current_orientation = np.array([imu.orientation.x,
-                                        imu.orientation.y,
-                                        imu.orientation.z,
-                                        imu.orientation.w])
-        # current_angular_speed = np.array([imu.angular_velocity.x,
-        #                                   imu.angular_velocity.y,
-        #                                   imu.angular_velocity.z])
-        diff_orientation = transformations.quaternion_multiply(
-            self.desired_orientation,
-            # Unit quaternion => inverse = conjugate / norm = congugate
-            transformations.quaternion_conjugate(current_orientation))
-
-        assert np.allclose(
-            transformations.quaternion_multiply(diff_orientation,
-                                                current_orientation),
-            self.desired_orientation)
-
-        # diff_r, diff_p, diff_y = transformations.euler_from_quaternion(
-        #     diff_orientation)
-        # rospy.loginfo("Orientation error (quaternion): {}".format(diff_orientation))
-        # rospy.loginfo(
-        #     "Orientation error (deg): {}".format(
-        #         np.rad2deg([diff_r, diff_p, diff_y]))
-        # )
-        # out = self.pitch_controller(diff_p)
-
-        corrected_orientation = transformations.quaternion_multiply(
-            quaternion_power(diff_orientation, 1.5),
-            self.desired_orientation)
-        rospy.loginfo(
-            "Desired orientation (deg): {}".format(
-                np.rad2deg(transformations.euler_from_quaternion(
-                    self.desired_orientation))))
-        rospy.loginfo(
-            "Corrected orientation (deg): {}".format(
-                np.rad2deg(transformations.euler_from_quaternion(
-                    corrected_orientation))))
-
-        rospy.loginfo("Desired position: {}".format(
-            self.desired_position))
-
-        setpoint_pose = Pose(self.desired_position, corrected_orientation)
+        setpoint_pose = Pose(
+            self.desired_position,
+            transformations.quaternion_multiply(
+                corrected_orientation,
+                transformations.quaternion_conjugate(self.base_orientation)
+                )
+            )
 
         servo_angles = self.platform.ik(setpoint_pose)
         rospy.logdebug(
